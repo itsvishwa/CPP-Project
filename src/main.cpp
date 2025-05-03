@@ -8,6 +8,7 @@
 #include <fstream>       
 #include <stdexcept>    
 #include <nlohmann/json.hpp> 
+#include <algorithm> // For std::clamp
 
 Config loadConfig(const std::string& filename) {
     std::ifstream configFile(filename);
@@ -84,23 +85,31 @@ Config loadConfig(const std::string& filename) {
 void renderASCII(const std::vector<std::unique_ptr<Particle>>& particles, double fieldSize, const Config& cfg) {
     std::vector<std::vector<int>> gridCounts(cfg.grid_height, std::vector<int>(cfg.grid_width, 0));
 
+    // Use the correct field size from containment field
+    double halfSize = fieldSize / 2.0;
+
     for (const auto& particle : particles) {
         double x = particle->getX();
         double y = particle->getY();
 
-        int col = static_cast<int>((x + fieldSize/2) * cfg.grid_width / fieldSize);
-        int row = static_cast<int>((y + fieldSize/2) * cfg.grid_height / fieldSize);
+        // Map particle positions to grid coordinates
+        int col = static_cast<int>((x + halfSize) * cfg.grid_width / fieldSize);
+        int row = static_cast<int>((y + halfSize) * cfg.grid_height / fieldSize);
 
+        // Ensure coordinates are within bounds
         col = std::clamp(col, 0, cfg.grid_width - 1);
         row = std::clamp(row, 0, cfg.grid_height - 1);
 
         gridCounts[row][col]++;
     }
 
+    // Clear screen and move cursor to top-left
     std::cout << "\033[2J\033[H"; 
 
+    // Draw top border
     std::cout << '+' << std::string(cfg.grid_width, '-') << "+\n";
 
+    // Draw grid with particle densities
     for (int i = 0; i < cfg.grid_height; ++i) {
         std::cout << '|'; 
         for (int j = 0; j < cfg.grid_width; ++j) {
@@ -116,6 +125,7 @@ void renderASCII(const std::vector<std::unique_ptr<Particle>>& particles, double
         std::cout << "|\n"; 
     }
 
+    // Draw bottom border
     std::cout << '+' << std::string(cfg.grid_width, '-') << "+\n";
 
     std::cout << std::flush;
@@ -128,18 +138,24 @@ int main() {
         std::cout << "Configuration loaded from " << configFilename << std::endl;
 
         Simulation simulation(config);
-
+        
+        // Start simulation with thread manager
         simulation.start();
 
         const double FRAME_TIME = 1.0 / config.target_fps;
+        auto lastStatTime = std::chrono::high_resolution_clock::now();
+        int frameCount = 0;
 
         while (simulation.getParticleCount() > 0) {
             auto frameStart = std::chrono::high_resolution_clock::now();
 
+            // Run a simulation step
             simulation.step();
 
+            // Render current state
             renderASCII(simulation.getParticles(), config.field_size, config);
 
+            // Maintain target framerate
             auto frameEnd = std::chrono::high_resolution_clock::now();
             auto frameDuration = std::chrono::duration<double>(frameEnd - frameStart).count();
 
@@ -149,17 +165,17 @@ int main() {
                 );
             }
 
-            static int frameCount = 0;
-             if (++frameCount % 30 == 0) {
-                 auto now = std::chrono::high_resolution_clock::now();
-                 static auto lastStatTime = now;
-                 auto elapsed = std::chrono::duration<double>(now - lastStatTime).count();
-                 double actualFps = (elapsed > 1e-6) ? (30.0 / elapsed) : 0.0;
-                 lastStatTime = now;
+            // Display stats periodically
+            if (++frameCount % 30 == 0) {
+                auto now = std::chrono::high_resolution_clock::now();
+                auto elapsed = std::chrono::duration<double>(now - lastStatTime).count();
+                double actualFps = (elapsed > 1e-6) ? (30.0 / elapsed) : 0.0;
+                lastStatTime = now;
 
                 std::cout << "\nParticles: " << simulation.getParticleCount()
                           << " | Energy: " << simulation.getTotalEnergy()
-                          << " | FPS: " << actualFps << std::endl;
+                          << " | FPS: " << actualFps 
+                          << " | Threads: " << simulation.getNumThreads() << std::endl;
             }
         }
 
@@ -171,4 +187,4 @@ int main() {
         return 1;
     }
     return 0;
-} 
+}
